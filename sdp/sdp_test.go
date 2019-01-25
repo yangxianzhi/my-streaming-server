@@ -1,8 +1,6 @@
 package sdp
 
 import (
-	"bufio"
-	"bytes"
 	"testing"
 )
 
@@ -53,7 +51,7 @@ func TestParseSdp(t *testing.T) {
 		{sdp2},
 	}
 	for _, test := range tests {
-		if _,err:=ParseSdp(bufio.NewReader(bytes.NewBufferString(test.input))); err !=nil{
+		if _,err:=ParseSdp(test.input); err !=nil{
 			t.Errorf("ParseSdp(%v)",err)
 		}
 	}

@@ -3,8 +3,8 @@ package rtsp
 import (
 	"bufio"
 	"fmt"
+	"github.com/yangxianzhi/CommonUtilities"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -300,7 +300,7 @@ type Request struct {
 	ProtoMinor    int
 	Header        http.Header
 	ContentLength int
-	Body          io.Reader
+	Body          string
 }
 
 func (r Request) String() string {
@@ -310,15 +310,11 @@ func (r Request) String() string {
 			s += fmt.Sprintf("%s: %s\r\n", k, v)
 		}
 	}
-	s += "\r\n"
-	if r.Body != nil {
-		str, _ := ioutil.ReadAll(r.Body)
-		s += string(str)
-	}
+	s += "\r\n" + r.Body
 	return s
 }
 
-func NewRequest(method, urlStr, cSeq string, body io.ReadCloser) (*Request, error) {
+func NewRequest(method, urlStr, cSeq string, body string) (*Request, error) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
 		return nil, err
@@ -352,7 +348,7 @@ func (s *Session) nextCSeq() string {
 }
 
 func (s *Session) Describe(urlStr string) (*Response, error) {
-	req, err := NewRequest(DESCRIBE, urlStr, s.nextCSeq(), nil)
+	req, err := NewRequest(DESCRIBE, urlStr, s.nextCSeq(), "")
 	if err != nil {
 		panic(err)
 	}
@@ -374,7 +370,7 @@ func (s *Session) Describe(urlStr string) (*Response, error) {
 }
 
 func (s *Session) Options(urlStr string) (*Response, error) {
-	req, err := NewRequest(OPTIONS, urlStr, s.nextCSeq(), nil)
+	req, err := NewRequest(OPTIONS, urlStr, s.nextCSeq(), "")
 	if err != nil {
 		panic(err)
 	}
@@ -394,7 +390,7 @@ func (s *Session) Options(urlStr string) (*Response, error) {
 }
 
 func (s *Session) Setup(urlStr, transport string) (*Response, error) {
-	req, err := NewRequest(SETUP, urlStr, s.nextCSeq(), nil)
+	req, err := NewRequest(SETUP, urlStr, s.nextCSeq(), "")
 	if err != nil {
 		panic(err)
 	}
@@ -418,7 +414,7 @@ func (s *Session) Setup(urlStr, transport string) (*Response, error) {
 }
 
 func (s *Session) Play(urlStr, sessionId string) (*Response, error) {
-	req, err := NewRequest(PLAY, urlStr, s.nextCSeq(), nil)
+	req, err := NewRequest(PLAY, urlStr, s.nextCSeq(), "")
 	if err != nil {
 		panic(err)
 	}
@@ -472,18 +468,16 @@ func ParseRTSPVersion(s string) (proto string, major int, minor int, err error) 
 }
 
 // super simple RTSP parser; would be nice if net/http would allow more general parsing
-func ReadRequest(r io.Reader) (req *Request, err error) {
+func ReadRequest(buffer []byte, length int) (req *Request, err error) {
 	req = new(Request)
 	req.Header = make(map[string][]string)
 
-	b := bufio.NewReader(r)
+	reqParser := commonutilities.New(string(buffer[:length]))
 	var s string
-
-	// TODO: allow CR, LF, or CRLF
-	if s, err = b.ReadString('\n'); err != nil {
+	var ok bool
+	if s, ok = reqParser.GetThruEOL(); !ok {
 		return
 	}
-
 	parts := strings.SplitN(s, " ", 3)
 	req.Method = parts[0]
 	if req.URL, err = url.Parse(parts[1]); err != nil {
@@ -497,9 +491,7 @@ func ReadRequest(r io.Reader) (req *Request, err error) {
 
 	// read headers
 	for {
-		if s, err = b.ReadString('\n'); err != nil {
-			return
-		} else if s = strings.TrimRight(s, "\r\n"); s == "" {
+		if s, ok = reqParser.GetThruEOL(); !ok || s == "" {
 			break
 		}
 
@@ -510,7 +502,7 @@ func ReadRequest(r io.Reader) (req *Request, err error) {
 	req.ContentLength, _ = strconv.Atoi(req.Header.Get(Headers[MySSContentLengthHeader]))
 	if req.ContentLength > 0 {
 		fmt.Println(Headers[MySSContentLengthHeader], req.ContentLength)
-		req.Body = b
+		req.Body = reqParser.ConsumeLength(req.ContentLength)
 	}
 	return
 }

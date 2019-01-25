@@ -2,6 +2,8 @@ package rtsp_server
 
 import (
 	"fmt"
+	"github.com/golang/go/src/pkg/strconv"
+	"github.com/yangxianzhi/CommonUtilities"
 	"github.com/yangxianzhi/my-streaming-server/rtsp"
 	"github.com/yangxianzhi/my-streaming-server/sdp"
 	"net"
@@ -17,11 +19,11 @@ type RTSPClientConnection struct {
 	currentCSeq    string
 	sessionIDStr   string
 	responseBuffer string
-	//clientSession  *RTSPClientSession
+	clientSession  *RTSPClientSession
 	server         *RTSPServer
 	//digest         *auth.Digest
-	sdpInfo			sdp.Info
-	reqInfo			rtsp.Request
+	sdpInfo sdp.Info
+	reqInfo rtsp.Request
 }
 
 func newRTSPClientConnection(server *RTSPServer, socket net.Conn) *RTSPClientConnection {
@@ -87,31 +89,91 @@ func (c *RTSPClientConnection) setRTSPResponseWithSessionID(responseStr string, 
 		responseStr, c.currentCSeq, rtsp.DateHeader(), sessionID)
 }
 
+const rtspBufferSize = 10000
+
 func (c *RTSPClientConnection) incomingRequestHandler() {
 	defer c.socket.Close()
 
+	var isClose bool
+	buffer := make([]byte, rtspBufferSize)
 	for {
-		if req,err := rtsp.ReadRequest(c.socket); err != nil {
-			break
-		} else {
-			c.currentCSeq = req.Header.Get(rtsp.Headers[rtsp.MySSCSeqHeader])
-			c.sessionIDStr = req.Header.Get(rtsp.Headers[rtsp.MySSCSeqHeader])
-			switch req.Method {
-			case rtsp.OPTIONS:
-				c.handleMethodOptions()
-			case rtsp.ANNOUNCE:
-				if _,err := sdp.ParseSdp(req.Body); err!=nil{
-					break
-				}
-				c.handleMethodAnnounce()
-			case rtsp.SETUP:
-			}
-			sendBytes, err := c.socket.Write([]byte(c.responseBuffer))
+		//b := bufio.NewReadWriter(bufio.NewReaderSize(c.socket,rtspBufferSize),bufio.NewWriterSize(c.socket,rtspBufferSize))
+		length, err := c.socket.Read(buffer)
+
+		switch err {
+		case nil:
+			err = c.handleRequestBytes(buffer, length)
 			if err != nil {
-				fmt.Printf("failed to send response buffer.%d", sendBytes)
-				break
+				fmt.Printf("Failed to handle Request Bytes: %v", err)
+				isClose = true
 			}
-			fmt.Printf("send response:\n%s", c.responseBuffer)
+		default:
+			fmt.Printf("default: %v", err)
+			if err.Error() == "EOF" {
+				isClose = true
+			}
+		}
+
+		if isClose {
+			break
 		}
 	}
+
+	fmt.Printf("disconnected the connection[%s:%s].", c.remoteAddr, c.remotePort)
+	if c.clientSession != nil {
+		c.clientSession.destroy()
+	}
+}
+
+func (c *RTSPClientConnection) handleRequestBytes(buffer []byte, length int) error {
+	if req, err := rtsp.ReadRequest(buffer, length); err != nil {
+		return err
+	} else {
+		c.currentCSeq = req.Header.Get(rtsp.Headers[rtsp.MySSCSeqHeader])
+		c.sessionIDStr = req.Header.Get(rtsp.Headers[rtsp.MySSSessionHeader])
+		switch req.Method {
+		case rtsp.OPTIONS:
+			c.handleMethodOptions()
+		case rtsp.ANNOUNCE:
+			contentLength, _ := strconv.Atoi(req.Header.Get(rtsp.Headers[rtsp.MySSContentLengthHeader]))
+			buffer:=make([]byte,rtspBufferSize)
+			if len1, err := c.socket.Read(buffer); err != nil && len1 == contentLength {
+				if _, err := sdp.ParseSdp(req.Body); err != nil {
+					break
+				}
+			}
+			c.handleMethodAnnounce()
+		case rtsp.SETUP:
+			if c.sessionIDStr == "" {
+				for {
+					c.sessionIDStr = fmt.Sprintf("%08X", commonutilities.OurRandom32())
+					if _, existed := c.server.getClientSession(c.sessionIDStr); !existed {
+						break
+					}
+				}
+				c.clientSession = c.newClientSession(c.sessionIDStr)
+				c.server.addClientSession(c.sessionIDStr, c.clientSession)
+			} else {
+				var existed bool
+				if c.clientSession, existed = c.server.getClientSession(c.sessionIDStr); !existed {
+					c.handleCommandSessionNotFound()
+				}
+			}
+
+			if c.clientSession != nil {
+				c.clientSession.handleCommandSetup(req.UrlPreSuffix, req.UrlSuffix, reqStr)
+			}
+		}
+		sendBytes, err := c.socket.Write([]byte(c.responseBuffer))
+		if err != nil {
+			fmt.Printf("failed to send response buffer.%d", sendBytes)
+			return err
+		}
+		fmt.Printf("send response:\n%s", c.responseBuffer)
+	}
+	return nil
+}
+
+func (c *RTSPClientConnection) newClientSession(sessionID string) *RTSPClientSession {
+	return newRTSPClientSession(c, sessionID)
 }

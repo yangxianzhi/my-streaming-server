@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"sync"
 )
 
 const (
@@ -14,13 +15,16 @@ const (
 type RTSPServer struct {
 	rtspPort 				int
 	rtspListen				*net.TCPListener
-
+	sessionMutex           sync.Mutex
+	clientSessions         map[string]*RTSPClientSession
 }
 
 func New() *RTSPServer {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	return &RTSPServer{}
+	return &RTSPServer{
+		clientSessions: make(map[string]*RTSPClientSession),
+	}
 }
 
 func (s *RTSPServer) Destroy() {
@@ -61,9 +65,28 @@ func (server *RTSPServer) incomingConnectionHandler(l *net.TCPListener) {
 	}
 }
 
-func (s *RTSPServer) newClientConnection(conn net.Conn) {
-	c := newRTSPClientConnection(s, conn)
+func (server *RTSPServer) newClientConnection(conn net.Conn) {
+	c := newRTSPClientConnection(server, conn)
 	if c != nil {
 		c.incomingRequestHandler()
 	}
+}
+
+func (s *RTSPServer) getClientSession(sessionID string) (clientSession *RTSPClientSession, existed bool) {
+	s.sessionMutex.Lock()
+	defer s.sessionMutex.Unlock()
+	clientSession, existed = s.clientSessions[sessionID]
+	return
+}
+
+func (s *RTSPServer) addClientSession(sessionID string, clientSession *RTSPClientSession) {
+	s.sessionMutex.Lock()
+	defer s.sessionMutex.Unlock()
+	s.clientSessions[sessionID] = clientSession
+}
+
+func (s *RTSPServer) removeClientSession(sessionID string) {
+	s.sessionMutex.Lock()
+	defer s.sessionMutex.Unlock()
+	delete(s.clientSessions, sessionID)
 }
