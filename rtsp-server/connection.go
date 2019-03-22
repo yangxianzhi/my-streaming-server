@@ -2,6 +2,7 @@ package rtsp_server
 
 import (
 	"fmt"
+
 	"github.com/golang/go/src/pkg/strconv"
 	"github.com/yangxianzhi/CommonUtilities"
 	"github.com/yangxianzhi/my-streaming-server/rtsp"
@@ -97,7 +98,9 @@ func (c *RTSPClientConnection) incomingRequestHandler() {
 	var isClose bool
 	buffer := make([]byte, rtspBufferSize)
 	for {
-		//b := bufio.NewReadWriter(bufio.NewReaderSize(c.socket,rtspBufferSize),bufio.NewWriterSize(c.socket,rtspBufferSize))
+		//timeoutTCPConn := &RichConn{c.socket, (time.Duration(1) * time.Millisecond)}
+		//b := bufio.NewReadWriter(bufio.NewReaderSize(timeoutTCPConn,rtspBufferSize),bufio.NewWriterSize(timeoutTCPConn,rtspBufferSize))
+		//length, err := io.ReadFull(b, buffer)
 		length, err := c.socket.Read(buffer)
 
 		switch err {
@@ -126,6 +129,10 @@ func (c *RTSPClientConnection) incomingRequestHandler() {
 }
 
 func (c *RTSPClientConnection) handleRequestBytes(buffer []byte, length int) error {
+	if length > 0 && buffer[0] == '$' {
+		return nil
+	}
+
 	if req, err := rtsp.ReadRequest(buffer, length); err != nil {
 		return err
 	} else {
@@ -136,8 +143,12 @@ func (c *RTSPClientConnection) handleRequestBytes(buffer []byte, length int) err
 			c.handleMethodOptions()
 		case rtsp.ANNOUNCE:
 			contentLength, _ := strconv.Atoi(req.Header.Get(rtsp.Headers[rtsp.MySSContentLengthHeader]))
-			buffer:=make([]byte,rtspBufferSize)
-			if len1, err := c.socket.Read(buffer); err != nil && len1 == contentLength {
+			if contentLength > 0 {
+				if len(req.Body) < contentLength {
+					buffer1 := make([]byte, rtspBufferSize)
+					c.socket.Read(buffer1)
+					req.Body = req.Body + string(buffer1[:])
+				}
 				if _, err := sdp.ParseSdp(req.Body); err != nil {
 					break
 				}
